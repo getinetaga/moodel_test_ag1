@@ -1,7 +1,4 @@
-// ignore_for_file: library_private_types_in_public_api
-
 import 'package:flutter/material.dart';
-
 import 'assignment.dart';
 import 'llm_service.dart';
 import 'moodle_service.dart';
@@ -11,17 +8,14 @@ class AssignmentGeneratorScreen extends StatefulWidget {
   final MoodleService moodleService;
 
   const AssignmentGeneratorScreen({
-    super.key,
+    Key? key,
     required this.apiService,
     required this.moodleService,
-  });
+  }) : super(key: key);
 
   @override
   _AssignmentGeneratorScreenState createState() =>
       _AssignmentGeneratorScreenState();
-}
-
-class MoodleService {
 }
 
 class _AssignmentGeneratorScreenState extends State<AssignmentGeneratorScreen> {
@@ -51,12 +45,14 @@ class _AssignmentGeneratorScreenState extends State<AssignmentGeneratorScreen> {
       await widget.apiService.generateAssignments(_promptController.text);
       setState(() {
         assignments = newAssignments;
-        isLoading = false;
         currentIndex = 0;
       });
     } catch (e) {
       setState(() {
         errorMessage = 'Error generating assignments: $e';
+      });
+    } finally {
+      setState(() {
         isLoading = false;
       });
     }
@@ -76,12 +72,11 @@ class _AssignmentGeneratorScreenState extends State<AssignmentGeneratorScreen> {
 
     try {
       for (var assignment in assignments) {
-        final response = await widget.moodleService.createAssignment(
-          courseId: '1', // Replace with actual course ID
+        await widget.moodleService.createAssignment(
+          courseId: assignment.courseId ?? '1', // Use actual course ID or handle null case
           name: assignment.name,
           description: assignment.question,
         );
-        //print('Assignment uploaded: ${response['id']}');
       }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Assignments uploaded successfully!')),
@@ -95,6 +90,16 @@ class _AssignmentGeneratorScreenState extends State<AssignmentGeneratorScreen> {
         isUploading = false;
       });
     }
+  }
+
+  void _cancelAssignments() {
+    setState(() {
+      _promptController.clear();
+      assignments.clear();
+      _answerControllers.clear();
+      currentIndex = 0;
+      errorMessage = null;
+    });
   }
 
   @override
@@ -197,15 +202,5 @@ class _AssignmentGeneratorScreenState extends State<AssignmentGeneratorScreen> {
         ),
       ),
     );
-  }
-
-  void _cancelAssignments() {
-    setState(() {
-      _promptController.clear(); // Clear the prompt input
-      assignments.clear(); // Clear the assignments list
-      _answerControllers.clear(); // Clear the answer controllers
-      currentIndex = 0; // Reset the current index
-      errorMessage = null; // Clear any error messages
-    });
   }
 }
