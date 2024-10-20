@@ -3,6 +3,8 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'assignment_generator_screen.dart';
 import 'llm_service.dart';
 import 'moodle_service.dart';
+import 'course_content.dart';
+import 'course_view.dart';
 
 Future<void> main() async {
   await dotenv.load(fileName: ".env");
@@ -14,7 +16,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     final llmService = LlmService(dotenv.env['LLM_API_KEY']!);
     final moodleService = MoodleService(
-      token: dotenv.env['MOODLE_API_TOKEN']!,
+      MOODLE_API_TOKEN: dotenv.env['MOODLE_API_TOKEN']!,
       moodleBaseUrl: dotenv.env['MOODLE_BASE_URL']!,
     );
 
@@ -23,10 +25,14 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.blue,
       ),
-      home: AssignmentGeneratorScreen(
-        apiService: llmService,
-        moodleService: moodleService,
-      ),
+      initialRoute: '/',
+      routes: {
+        '/': (context) => AssignmentGeneratorScreen(
+          apiService: llmService,
+          moodleService: moodleService,
+        ),
+        '/course_view': (context) => CourseList(),
+      },
     );
   }
 }
