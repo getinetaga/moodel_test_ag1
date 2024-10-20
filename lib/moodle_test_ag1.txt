@@ -1,0 +1,495 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'llm_service.dart';
+import 'moodle_service.dart';
+import 'assignment_generator_screen.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: "assets/.env");
+
+  final moodleToken = dotenv.env['MOODLE_API_TOKEN'] ?? '';
+  final moodleBaseUrl = dotenv.env['MOODLE_BASE_URL'] ?? '';
+  final perplexityApiKey = dotenv.env['PERPLEXITY_API_KEY'] ?? '';
+
+  // Check if Moodle API configuration is provided
+  if (moodleToken.isEmpty || moodleBaseUrl.isEmpty) {
+    throw Exception('Moodle API configuration is missing in .env file');
+  }
+
+  // Initialize services
+  final moodleService = MoodleService(token:  '', moodleUrl: moodleBaseUrl);
+  final apiService = LlmService(perplexityApiKey);
+
+  // Run the app
+  runApp(AssignmentApp(llmService: apiService, moodleService: moodleService));
+}
+
+class AssignmentApp extends StatelessWidget {
+  final LlmService llmService;
+  final MoodleService moodleService;
+
+  const AssignmentApp({super.key, required this.llmService, required this.moodleService});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Assignment Generator',
+      theme: ThemeData(primarySwatch: Colors.blue),
+      home: AssignmentGeneratorScreen(apiService: llmService, moodleService: moodleService),
+    );
+  }
+}
+
+
+
+
+
+import 'package:flutter/material.dart';
+
+import 'llm_service.dart';
+
+enum AssignmentType { multipleChoice, trueFalse, shortAnswer, essay, code }
+
+class Assignment {
+  final String name;
+  final String question;
+  final AssignmentType type;
+  final List<String>? options;
+  String? answer;
+  final String? courseId;
+
+  Assignment({
+    required this.name,
+    required this.question,
+    required this.type,
+    this.options,
+    this.answer,
+    this.courseId,
+  });
+
+  factory Assignment.fromJson(json) {
+    return Assignment(
+      name: json['name'] ?? 'Untitled Assignment',
+      question: json['question'] ?? '',
+      type: _parseAssignmentType(json['type']),
+      options: json['options'] != null ? List<String>.from(json['options']) : null,
+      answer: json['answer'],
+      courseId: json['subjectId'],
+    );
+  }
+
+  static AssignmentType _parseAssignmentType(String? type) {
+    switch (type?.toLowerCase()) {
+      case 'multiplechoice':
+        return AssignmentType.multipleChoice;
+      case 'truefalse':
+        return AssignmentType.trueFalse;
+      case 'shortanswer':
+        return AssignmentType.shortAnswer;
+      case 'essay':
+        return AssignmentType.essay;
+      case 'code':
+        return AssignmentType.code;
+      default:
+        return AssignmentType.shortAnswer;
+    }
+  }
+}
+import 'package:flutter/material.dart';
+import 'llm_service.dart';
+import 'assignment.dart';
+import 'moodle_service.dart';
+
+class AssignmentGeneratorScreen extends StatefulWidget {
+  final LlmService apiService;
+  final MoodleService moodleService;
+
+  const AssignmentGeneratorScreen({
+    super.key,
+    required this.apiService,
+    required this.moodleService,
+  });
+
+  @override
+  _AssignmentGeneratorScreenState createState() =>
+      _AssignmentGeneratorScreenState();
+}
+
+class _AssignmentGeneratorScreenState extends State<AssignmentGeneratorScreen> {
+  final TextEditingController _promptController = TextEditingController();
+  final Map<int, TextEditingController> _answerControllers = {};
+  List<Assignment> assignments = [];
+  bool isLoading = false;
+  bool isUploading = false;
+  String? errorMessage;
+  int currentIndex = 0;
+
+  Future<void> _generateAssignments() async {
+    if (_promptController.text.isEmpty) {
+      setState(() {
+        errorMessage = 'Please enter a prompt';
+      });
+      return;
+    }
+
+    setState(() {
+      isLoading = true;
+      errorMessage = null;
+    });
+
+    try {
+      final newAssignments =
+      await widget.apiService.generateAssignments(_promptController.text);
+      setState(() {
+        assignments = newAssignments;
+        isLoading = false;
+        currentIndex = 0;
+      });
+    } catch (e) {
+      setState(() {
+        errorMessage = 'Error generating assignments: $e';
+        isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _uploadAssignmentsToMoodle() async {
+    if (assignments.isEmpty) {
+      setState(() {
+        errorMessage = 'No assignments available to upload';
+      });
+      return;
+    }
+
+    setState(() {
+      isUploading = true;
+    });
+
+    try {
+      for (var assignment in assignments) {
+        final response = await widget.moodleService.createAssignment(
+          courseId: '1', // Replace with actual course ID
+          name: assignment.name,
+          description: assignment.question,
+        );
+        print('Assignment uploaded: ${response['id']}');
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Assignments uploaded successfully!')),
+      );
+    } catch (e) {
+      setState(() {
+        errorMessage = 'Error uploading assignments: $e';
+      });
+    } finally {
+      setState(() {
+        isUploading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Assignment Generator'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            TextField(
+              controller: _promptController,
+              decoration: const InputDecoration(
+                labelText: 'Enter assignment prompt',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 3,
+            ),
+            const SizedBox(height: 16),
+            if (errorMessage != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Text(
+                  errorMessage!,
+                  style: const TextStyle(color: Colors.red),
+                ),
+              ),
+            ElevatedButton(
+              onPressed: isLoading ? null : _generateAssignments,
+              child: isLoading
+                  ? const CircularProgressIndicator()
+                  : const Text('Generate Assignment'),
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: assignments.isEmpty
+                  ? const Center(child: Text('No assignments generated yet'))
+                  : ListView.builder(
+                itemCount: assignments.length,
+                itemBuilder: (context, index) {
+                  final assignment = assignments[index];
+                  if (!_answerControllers.containsKey(index)) {
+                    _answerControllers[index] =
+                        TextEditingController();
+                  }
+
+                  return Card(
+                    child: ListTile(
+                      title: Text(assignment.name),
+                      subtitle: Text(assignment.question),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      bottomNavigationBar: BottomAppBar(
+        child: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              ElevatedButton(
+                onPressed: currentIndex > 0
+                    ? () {
+                  setState(() {
+                    currentIndex--;
+                  });
+                }
+                    : null,
+                child: const Text('Previous'),
+              ),
+              ElevatedButton(
+                onPressed: currentIndex < assignments.length - 1
+                    ? () {
+                  setState(() {
+                    currentIndex++;
+                  });
+                }
+                    : null,
+                child: const Text('Next'),
+              ),
+              ElevatedButton(
+                onPressed: (assignments.isEmpty || isUploading)
+                    ? null
+                    : _uploadAssignmentsToMoodle,
+                child: isUploading
+                    ? const CircularProgressIndicator()
+                    : const Text('Upload to Moodle'),
+              ),
+              ElevatedButton(
+                onPressed: _cancelAssignments,
+                child: const Text('Cancel'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _cancelAssignments() {
+    setState(() {
+      _promptController.clear(); // Clear the prompt input
+      assignments.clear(); // Clear the assignments list
+      _answerControllers.clear(); // Clear the answer controllers
+      currentIndex = 0; // Reset the current index
+      errorMessage = null; // Clear any error messages
+    });
+  }
+}
+// moodle_service.dart
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'package:flutter/material.dart';
+import 'llm_service.dart';
+import 'assignment.dart';
+
+class MoodleService {
+
+  final String moodleBaseUrl= 'https://www.swen670moodle.site/';
+  final String token;
+
+  MoodleService({required this.token});
+
+  // Fetch available Moodle courses
+  Future<List<Map<String, dynamic>>> fetchCourses() async {
+    final response = await http.get(
+      Uri.parse(
+          '$moodleBaseUrl/webservice/rest/server.php?wstoken=$token&wsfunction=core_course_get_courses&moodlewsrestformat=json'),
+    );
+
+    if (response.statusCode == 200) {
+      return List<Map<String, dynamic>>.from(json.decode(response.body));
+    } else {
+      throw Exception('Failed to load courses: ${response.statusCode}');
+    }
+  }
+
+  // Create a new assignment in Moodle
+  Future<Map<String, dynamic>> createAssignment({
+    required String courseId,
+    required String name,
+    required String description,
+  }) async {
+    final response = await http.post(
+      Uri.parse('MOODLE_BASE_URL'),
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: {
+        'wstoken': token,
+        'wsfunction': 'mod_assign_create_assignments',
+        'moodlewsrestformat': 'json',
+        'assignments': jsonEncode([
+          {
+            'courseid': courseId,
+            'name': name,
+            'intro': description,
+            'duedate': (DateTime.now().millisecondsSinceEpoch / 1000).round(),
+          }
+        ])
+      },
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Failed to create assignment: ${response.statusCode}');
+    }
+  }
+}
+
+// Eval_AssignGenerator.dart
+
+
+class AssignmentGenerator extends StatefulWidget {
+  final LlmService llmService;
+  final MoodleService moodleService;
+
+  const AssignmentGenerator({super.key, required this.llmService, required this.moodleService});
+
+  @override
+  _AssignmentGeneratorState createState() => _AssignmentGeneratorState();
+}
+
+class _AssignmentGeneratorState extends State<AssignmentGenerator> {
+  final TextEditingController _promptController = TextEditingController();
+  List<Assignment> assignments = [];
+  bool isLoading = false;
+  String? errorMessage;
+
+  // Method to generate and upload assignment
+  Future<void> _generateAndUploadAssignment() async {
+    if (_promptController.text.isEmpty) {
+      setState(() {
+        errorMessage = 'Please enter a prompt';
+      });
+      return;
+    }
+
+    setState(() {
+      isLoading = true;
+      errorMessage = null;
+    });
+
+    try {
+      // Step 1: Generate assignments using the LLM
+      final newAssignments = await widget.llmService.generateAssignments(_promptController.text);
+
+      setState(() {
+        assignments = newAssignments;
+        isLoading = false;
+        errorMessage = null;
+      });
+
+      // Step 2: Automatically upload each assignment to Moodle
+      for (var assignment in newAssignments) {
+        final response = await widget.moodleService.createAssignment(
+          courseId: '1', // Replace with actual course ID
+          name: assignment.name,
+          description: assignment.question,
+        );
+
+        if (kDebugMode) {
+          print('Assignment uploaded successfully: ${response['id']}');
+        }
+      }
+
+      // Show success message after uploading all assignments
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Assignments uploaded to Moodle successfully!')),
+      );
+    } catch (e) {
+      setState(() {
+        errorMessage = 'Error generating or uploading assignments: $e';
+        isLoading = false;
+      });
+    }
+  }
+
+  // Method to fetch Moodle courses
+  Future<void> _fetchMoodleCourses() async {
+    try {
+      final courses = await widget.moodleService.fetchCourses();
+      for (var course in courses) {
+        if (kDebugMode) {
+          print('Course ID: ${course['id']}, Course Name: ${course['fullname']}');
+        }
+      }
+    } catch (e) {
+      print('Failed to fetch Moodle courses: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Assignment Generator'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            TextField(
+              controller: _promptController,
+              decoration: const InputDecoration(
+                labelText: 'Enter prompt for assignment generation',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 3,
+            ),
+            const SizedBox(height: 16),
+            if (errorMessage != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Text(
+                  errorMessage!,
+                  style: const TextStyle(color: Colors.red),
+                ),
+              ),
+            ElevatedButton(
+              onPressed: isLoading ? null : _generateAndUploadAssignment,
+              child: isLoading
+                  ? const CircularProgressIndicator()
+                  : const Text('Generate and Upload Assignment'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+
+
+
+
+
